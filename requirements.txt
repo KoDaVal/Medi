@@ -1,0 +1,6 @@
+flask
+requests
+edge-tts>=6.1,<7
+gunicorn
+python-multipart
+python-docx
