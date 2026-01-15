@@ -1,383 +1,209 @@
 import os
-
 import uuid
-
 import asyncio
-
-import tempfile
-
 import logging
-
+import json
 from flask import Flask, request, jsonify, send_file
-
 from flask_cors import CORS
-
 import requests
-
 import edge_tts
 
-
-
 # =============================================================================
-
 # CONFIGURACIÓN
-
 # =============================================================================
-
-app = Flask(_name_)
-
+app = Flask(__name__)
 CORS(app)
-
 logging.basicConfig(level=logging.INFO)
-
-
 
 sessions = {}
 
-
-
-# Asegúrate de tener estas variables en Render
-
-DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "")
-
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-
+# CLAVES DE API
+# Deepgram se toma del entorno. Asegúrate de ponerla en "Environment Variables" de Render.
+DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "") 
+# OpenRouter hardcodeada como pediste
+OPENROUTER_API_KEY = "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"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-
-
-# =============================================================================
-
-# CONFIGURACIÓN DE MENTORES
+# CONFIGURACIÓN DE VOZ
+MEDICAL_VOICE = "es-MX-DaliaNeural" 
 
 # =============================================================================
-
-MENTORS_BASE_CONFIG = {
-
-    "newton": {
-
-        "name": "Isaac Newton",
-
-        "voice": "es-MX-JorgeNeural",
-
-        "base_prompt": (
-
-            "Eres Isaac Newton. Responde con autoridad matemática pero sé directo. "
-
-            "Usa analogías físicas breves solo si aclaran el punto."
-
-        )
-
-    },
-
-    "einstein": {
-
-        "name": "Albert Einstein",
-
-        "voice": "es-ES-AlvaroNeural",
-
-        "base_prompt": (
-
-            "Eres Albert Einstein. Valora la intuición sobre el formalismo. "
-
-            "Sé amable, curioso y ve al grano."
-
-        )
-
-    },
-
-    "raava": {
-
-        "name": "Raava (IA)",
-
-        "voice": "es-MX-DaliaNeural",
-
-        "base_prompt": (
-
-            "Eres Raava, una IA educativa eficiente. "
-
-            "Tu prioridad es la claridad absoluta y la brevedad."
-
-        )
-
-    }
-
-}
-
-
-
+# PROMPT ENGINEERING - MODO MEDICINA
 # =============================================================================
 
-# PROMPT ENGINEERING MEJORADO (RESPUESTAS CORTAS)
-
-# =============================================================================
-
-
-
-def build_dynamic_system_prompt(mentor_id, user_data, current_topic):
-
+def build_medical_prompt(user_data, current_topic):
     """
-
-    Construye un prompt estricto para respuestas cortas y enfocadas.
-
+    Construye un prompt enfocado en educación médica, clínica y anatomía.
     """
-
-    mentor_config = MENTORS_BASE_CONFIG.get(mentor_id, MENTORS_BASE_CONFIG["raava"])
-
-    base = mentor_config["base_prompt"]
-
+    nombre = user_data.get("nombre", "Colega")
     
-
-    nombre = user_data.get("nombre", "Estudiante")
-
-    pasion = user_data.get("pasion", "aprender")
-
-    estilo = user_data.get("aprendizaje", "general")
-
-
-
-    # INSTRUCCIONES ESTRICTAS DE COMPORTAMIENTO
-
     prompt = f"""
+    Eres un Mentor Médico Senior con amplia experiencia clínica y académica.
+    Tu objetivo es ayudar al estudiante {nombre} a dominar el tema: "{current_topic}".
 
-    {base}
-
+    PAUTAS DE COMPORTAMIENTO:
+    1. **Precisión Clínica:** Usa terminología médica correcta (e.g., "cefalea" en lugar de "dolor de cabeza" si aplica), pero explica el término si es complejo.
+    2. **Brevedad Extrema:** Tus respuestas deben ser de 2 o 3 oraciones máximo. Ve al grano.
+    3. **Enfoque Práctico:** Siempre intenta relacionar la teoría con un caso clínico rápido o una aplicación práctica.
+    4. **Seguridad:** Si el usuario pregunta algo peligroso, recuerda que eres una IA educativa, no un médico real tratando un paciente real.
     
-
-    ESTÁS EN UNA SESIÓN DE TUTORÍA INTENSIVA.
-
-    
-
-    CONTEXTO ACTUAL:
-
-    - Estudiante: {nombre} ({estilo})
-
-    - Interés: {pasion}
-
-    - TEMA OBLIGATORIO: "{current_topic}"
-
-    
-
-    REGLAS DE RESPUESTA (INVIOLABLES):
-
-    1. *BREVEDAD EXTREMA:* Tus respuestas NO deben superar las 2 o 3 oraciones (aprox 40 palabras). Sé conciso.
-
-    2. *SIN SALUDOS:* No digas "Hola" ni "Entendido" en cada turno. Responde directamente a la pregunta o comentario.
-
-    3. *FOCO TOTAL:* Asume que cualquier cosa que diga el usuario es sobre "{current_topic}". Contextualiza tu respuesta inmediatamente en ese tema.
-
-    4. *NO DIVAGUES:* No des explicaciones enciclopédicas. Explica el concepto y propón un paso práctico.
-
-    
-
-    Ejemplo de comportamiento deseado:
-
-    Usuario: "¿Qué es una variable?"
-
-    Tú: "Imagina que es una caja vacía donde guardamos un valor numérico, como los goles en un partido de {pasion}. En álgebra, usamos letras como 'x' para representar esas cajas."
-
+    ESTILO:
+    - Profesional, empático y directo.
+    - No saludes repetitivamente.
     """
-
     return prompt
 
-
-
 # =============================================================================
-
 # RUTAS DE LA API
-
 # =============================================================================
-
-
 
 @app.route("/", methods=["GET"])
-
 def health_check():
-
-    return jsonify({"status": "online", "message": "Fiscamp Education Backend Running"})
-
-
+    return jsonify({"status": "online", "message": "Medical Tutor Backend Running"})
 
 # 1. INICIALIZAR SESIÓN
-
 @app.route("/init_session", methods=["POST"])
-
 def init_session():
-
     try:
-
         data = request.json
-
         session_id = data.get("session_id")
-
-        mentor_id = data.get("mentor_id", "raava")
-
         user_data = data.get("user_data", {})
+        current_topic = data.get("current_topic", "Medicina General")
 
-        current_topic = data.get("current_topic", "General")
+        if not session_id:
+            session_id = str(uuid.uuid4())
 
-
-
-        system_prompt = build_dynamic_system_prompt(mentor_id, user_data, current_topic)
-
-
+        system_prompt = build_medical_prompt(user_data, current_topic)
 
         sessions[session_id] = [
-
             {"role": "system", "content": system_prompt}
-
         ]
-
         
-
-        logging.info(f"Sesion iniciada: {session_id} | Tema: {current_topic}")
-
-        return jsonify({"status": "ok", "message": "Sesión configurada"})
-
+        logging.info(f"Sesion Médica iniciada: {session_id} | Tema: {current_topic}")
+        return jsonify({
+            "status": "ok", 
+            "message": "Sesión médica configurada", 
+            "session_id": session_id,
+            "mentor_name": "Dr. AI"
+        })
     except Exception as e:
-
         logging.error(f"Error init_session: {e}")
-
         return jsonify({"error": str(e)}), 500
 
-
-
 # 2. CHAT (LLM)
-
 @app.route("/chat", methods=["POST"])
-
 def chat():
-
     data = request.json
-
-    session_id = data.get("session_id", "default")
-
+    session_id = data.get("session_id")
     user_msg = data.get("message", "")
-
-    mentor_id = data.get("mentor_id", "raava")
-
     
-
     # Fallback context
-
     user_context = data.get("user_context", {})
+    current_topic = data.get("current_topic", "Medicina General")
 
-    current_topic = data.get("current_topic", "General")
-
-
-
-    if not user_msg:
-
-        return jsonify({"error": "Mensaje vacío"}), 400
-
-
-
-    if session_id not in sessions:
-
-        sys_prompt = build_dynamic_system_prompt(mentor_id, user_context, current_topic)
-
+    if not session_id or session_id not in sessions:
+        session_id = session_id or str(uuid.uuid4())
+        sys_prompt = build_medical_prompt(user_context, current_topic)
         sessions[session_id] = [{"role": "system", "content": sys_prompt}]
-
     
+    if not user_msg:
+        return jsonify({"error": "Mensaje vacío"}), 400
 
     sessions[session_id].append({"role": "user", "content": user_msg})
 
-
-
     headers = {
-
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-
         "Content-Type": "application/json",
-
-        "HTTP-Referer": "https://fiscamp-edu.onrender.com", 
-
-        "X-Title": "Fiscamp Education"
-
+        "HTTP-Referer": "https://medical-tutor.onrender.com", 
+        "X-Title": "Medical Tutor"
     }
-
-
-
-    # Ajustes para respuestas cortas
 
     payload = {
-
         "model": "meta-llama/llama-3-8b-instruct",
-
         "messages": sessions[session_id],
-
-        "temperature": 0.4, # Baja temperatura para precisión
-
-        "max_tokens": 150,  # Límite estricto de tokens para forzar brevedad
-
-        "presence_penalty": 0.5 # Evitar repeticiones
-
+        "temperature": 0.3, # Baja temperatura para precisión médica
+        "max_tokens": 200,
+        "presence_penalty": 0.2
     }
 
-
-
     try:
-
         response = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=30)
-
         response.raise_for_status()
-
         result = response.json()
-
         
-
         reply = result["choices"][0]["message"]["content"]
-
         sessions[session_id].append({"role": "assistant", "content": reply})
-
         
-
         return jsonify({
-
             "reply": reply,
-
-            "mentor": MENTORS_BASE_CONFIG.get(mentor_id, {}).get("name", "Mentor")
-
+            "mentor": "Dr. AI",
+            "session_id": session_id
         })
 
-
-
     except Exception as e:
-
         logging.error(f"Error OpenRouter: {e}")
-
-        return jsonify({"error": str(e), "reply": "Error de conexión."}), 500
-
-
+        return jsonify({"error": str(e), "reply": "Error de conexión con el servicio médico."}), 500
 
 # 3. LISTEN (STT)
-
 @app.route("/listen", methods=["POST"])
-
 def listen():
-
     if "audio" not in request.files:
-
-        return jsonify({"error": "No audio"}), 400
-
-
+        return jsonify({"error": "No audio file"}), 400
 
     audio_file = request.files["audio"]
+    
+    # MOCK AUTOMÁTICO SI NO HAY KEY CONFIGURADA EN RENDER
+    # Esto evita que la app falle si olvidaste poner la variable de entorno
+    if not DEEPGRAM_API_KEY:
+        logging.warning("DEEPGRAM_API_KEY no encontrada. Usando modo simulación.")
+        return jsonify({"text": "Simulación: Paciente presenta dolor torácico agudo irradiado al brazo izquierdo."})
 
-    headers = { "Authorization": f"Token {DEEPGRAM_API_KEY}", "Content-Type": "audio/wav" }
+    headers = { 
+        "Authorization": f"Token {DEEPGRAM_API_KEY}", 
+        "Content-Type": audio_file.content_type or "audio/wav"
+    }
 
     url = "https://api.deepgram.com/v1/listen?model=nova-2&language=es&smart_format=true"
 
+    try:
+        # AQUÍ ESTABA EL ERROR: timeout=30 estaba cortado
+        response = requests.post(url, headers=headers, data=audio_file.read(), timeout=30)
+        response.raise_for_status()
+        result = response.json()
+        
+        # Extracción segura de la transcripción
+        alternatives = result.get("results", {}).get("channels", [{}])[0].get("alternatives", [{}])
+        transcript = alternatives[0].get("transcript", "") if alternatives else ""
+        
+        return jsonify({"text": transcript})
 
+    except Exception as e:
+        logging.error(f"Error Deepgram STT: {e}")
+        # En caso de error con Deepgram, devolvemos un error JSON válido en lugar de crashear
+        return jsonify({"error": str(e)}), 500
+
+# 4. SPEAK (TTS)
+@app.route("/speak", methods=["POST"])
+def speak():
+    data = request.json
+    text = data.get("text", "")
+    
+    if not text:
+        return jsonify({"error": "No text provided"}), 400
+
+    output_file = f"tts_{uuid.uuid4()}.mp3"
+    
+    async def generate_audio():
+        communicate = edge_tts.Communicate(text, MEDICAL_VOICE)
+        await communicate.save(output_file)
 
     try:
+        asyncio.run(generate_audio())
+        return send_file(output_file, mimetype="audio/mpeg")
+    except Exception as e:
+        logging.error(f"Error TTS: {e}")
+        return jsonify({"error": str(e)}), 500
 
-        response = requests.post(url, headers=headers, data=audio_file.read(), timeo…
-
-
-
-ocupo solo lo de chat de voz y chat de texto, manten tal cual el modelo, te paso mi open router key, hardcodeala: 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
-
-
-
-te mando el codigo frontend del proyecto:
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
